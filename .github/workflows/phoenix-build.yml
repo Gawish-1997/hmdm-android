@@ -1,0 +1,30 @@
+# Phoenix custom Headwind launcher — CI build.
+# Step 1 (this file): prove the stock source compiles in CI on the pinned toolchain.
+# The Phoenix patches (factory-reset restriction, clean status bar, hidden MDM icons) and APK signing
+# are added on top once this is green.
+name: phoenix-build
+on:
+  push:
+    branches: [master, "phoenix/**"]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Assemble opensource release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleOpensourceRelease --no-daemon --stacktrace
+      - name: Show APK output
+        run: find app/build/outputs/apk -name '*.apk' -print -exec ls -la {} \;
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phoenix-launcher-apk
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
