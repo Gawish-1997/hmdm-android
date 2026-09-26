@@ -16,7 +16,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest ships the Android SDK pre-installed (ANDROID_SDK_ROOT set, licences accepted).
+      # setup-android@v3 fails trying to fetch the deprecated 'tools' package, so we use the built-in SDK.
+      - name: Show Android SDK
+        run: echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"; ls "$ANDROID_SDK_ROOT/platforms" || true
       - name: Assemble opensource release APK
         run: |
           chmod +x gradlew
