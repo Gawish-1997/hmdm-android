@@ -1,7 +1,7 @@
-# Phoenix custom Headwind launcher — CI build.
-# Step 1 (this file): prove the stock source compiles in CI on the pinned toolchain.
-# The Phoenix patches (factory-reset restriction, clean status bar, hidden MDM icons) and APK signing
-# are added on top once this is green.
+# Phoenix custom Headwind launcher — CI build + sign.
+# Produces a SIGNED, installable APK of the launcher. Phoenix patches (factory-reset restriction,
+# clean status bar, hidden MDM icons, MQTT_SERVICE_FOREGROUND=false) are applied in the source; this
+# workflow builds, zipaligns and signs the result with the Phoenix launcher key (from repo secrets).
 name: phoenix-build
 on:
   push:
@@ -16,18 +16,33 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      # ubuntu-latest ships the Android SDK pre-installed (ANDROID_SDK_ROOT set, licences accepted).
-      # setup-android@v3 fails trying to fetch the deprecated 'tools' package, so we use the built-in SDK.
-      - name: Show Android SDK
-        run: echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"; ls "$ANDROID_SDK_ROOT/platforms" || true
-      - name: Assemble opensource release APK
+      # ubuntu-latest ships the Android SDK; setup-android@v3 breaks on a dead 'tools' package.
+      - name: Build the release APK
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleOpensourceRelease --no-daemon --stacktrace
-      - name: Show APK output
-        run: find app/build/outputs/apk -name '*.apk' -print -exec ls -la {} \;
+      - name: Zipalign + sign with the Phoenix launcher key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -eu
+          BT="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/ | sort -V | tail -1)"
+          echo "build-tools: $BT"
+          UNSIGNED="$(find app/build/outputs/apk -name '*-release-unsigned.apk' | head -1)"
+          [ -n "$UNSIGNED" ] || { echo "no unsigned release APK found"; find app/build/outputs/apk -name '*.apk'; exit 1; }
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/phoenix.p12"
+          "${BT}zipalign" -f 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+          "${BT}apksigner" sign --ks "$RUNNER_TEMP/phoenix.p12" --ks-type PKCS12 \
+            --ks-pass "pass:$KS_PASS" --ks-key-alias "$KEY_ALIAS" --key-pass "pass:$KEY_PASS" \
+            --out phoenix-launcher-signed.apk "$RUNNER_TEMP/aligned.apk"
+          "${BT}apksigner" verify --verbose phoenix-launcher-signed.apk
+          rm -f "$RUNNER_TEMP/phoenix.p12"
+          ls -la phoenix-launcher-signed.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: phoenix-launcher-apk
-          path: app/build/outputs/apk/**/*.apk
+          name: phoenix-launcher-signed-apk
+          path: phoenix-launcher-signed.apk
           if-no-files-found: error
