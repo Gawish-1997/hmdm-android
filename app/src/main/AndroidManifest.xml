@@ -98,6 +98,8 @@
     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_RESTRICT_PRIVATE_DNS" />
     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_SAFE_BOOT" />
     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_SCREEN_CONTENT" />
+    <!-- Phoenix custom build: disable the real status bar (hide OS management disclosures) as device owner -->
+    <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_STATUS_BAR" />
     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_SMS" />
     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_SYSTEM_UPDATES" />
     <uses-permission android:name="android.permission.MANAGE_DEVICE_POLICY_SYSTEM_DIALOGS" />
@@ -136,8 +138,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <action android:name="android.app.action.PROVISIONING_SUCCESSFUL"/>
 
-                <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                <!-- Phoenix custom build: LAUNCHER/LEANBACK_LAUNCHER categories removed so the launcher
+                     shows NO icon in the stock Lenovo app drawer. It stays a HOME candidate (needed for
+                     kiosk/managed-home fallback and enrolment), just invisible as an app. -->
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.HOME" />
             </intent-filter>
@@ -266,6 +269,14 @@
 
         <service android:name=".service.StatusControlService"
             android:exported="false"/>
+
+        <!-- Phoenix custom build: draws the clean status bar (clock/battery/wifi) once the real bar is disabled -->
+        <service android:name=".service.StatusBarOverlayService"
+            android:foregroundServiceType="specialUse|systemExempted"
+            android:exported="false">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Status bar overlay"/>
+        </service>
 
         <service android:name=".service.PushLongPollingService"
             android:foregroundServiceType="specialUse|systemExempted"

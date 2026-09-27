@@ -75,6 +75,28 @@ public class Utils {
         return dpm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && dpm.isDeviceOwnerApp(context.getPackageName());
     }
 
+    // Phoenix custom build: hide Android's forced management disclosures on the STOCK home.
+    // On the normal Lenovo home the OS pins "Privacy reminder", "Location can be accessed" and the
+    // MDM push notification onto the real status bar, and no server toggle removes them (blockStatusBar
+    // only covers Headwind's own managed home). As device owner we disable the real status bar and its
+    // shade entirely — which also hides the foreground-service notification and the notification-shade
+    // route to the privacy dot — and StatusBarOverlayService then draws a clean bar with the clock,
+    // battery and wifi the owner wants kept. Reversible: pass false to restore the OS bar.
+    public static void setStatusBarDisabled(Context context, boolean disabled) {
+        if (!isDeviceOwner(context)) {
+            return;
+        }
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName adminComponentName = LegacyUtils.getAdminComponentName(context);
+            if (dpm != null && adminComponentName != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                dpm.setStatusBarDisabled(adminComponentName, disabled);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     // In the open source variant, there are no flavors, so by default it's "opensource"
     public static String getLauncherVariant() {
         return BuildConfig.FLAVOR == null || BuildConfig.FLAVOR.equals("") ? "opensource" : BuildConfig.FLAVOR;

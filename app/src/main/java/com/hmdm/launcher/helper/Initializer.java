@@ -23,6 +23,7 @@ import com.hmdm.launcher.pro.service.CheckForegroundAppAccessibilityService;
 import com.hmdm.launcher.pro.service.CheckForegroundApplicationService;
 import com.hmdm.launcher.pro.worker.DetailedInfoWorker;
 import com.hmdm.launcher.service.PushLongPollingService;
+import com.hmdm.launcher.service.StatusBarOverlayService;
 import com.hmdm.launcher.service.StatusControlService;
 import com.hmdm.launcher.task.SendDeviceInfoTask;
 import com.hmdm.launcher.util.ConnectionWaiter;
@@ -151,6 +152,22 @@ public class Initializer {
         }
         try {
             context.startService(new Intent(context, StatusControlService.class));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        // Phoenix custom build: hide Android's forced status-bar disclosures ("Privacy reminder",
+        // "Location can be accessed", the managed-device notice, the MQTT push notification) on the
+        // stock Lenovo home by disabling the real bar as device owner, then draw our own clean bar
+        // (clock/battery/wifi) in its place. See Utils.setStatusBarDisabled and StatusBarOverlayService.
+        Utils.setStatusBarDisabled(context, true);
+        try {
+            Intent barIntent = new Intent(context, StatusBarOverlayService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(barIntent);
+            } else {
+                context.startService(barIntent);
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
