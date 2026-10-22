@@ -233,21 +233,36 @@ public class LocationService extends Service {
 
         locationManager.removeUpdates(networkLocationListener);
         locationManager.removeUpdates(gpsLocationListener);
-        try {
-            locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, LOCATION_UPDATE_INTERVAL, 0, networkLocationListener);
-            if (updateViaGps) {
+
+        // Phoenix custom build 6.45: register each provider INDEPENDENTLY, and only when it exists.
+        // Until now the network provider was requested unconditionally and BEFORE GPS inside one try
+        // block. The rep tablets have no Google network-location provider, so that first call threw
+        // "provider doesn't exist", the catch returned false, GPS was never registered, and
+        // onStartCommand then read that false as "no permissions" and stopped the whole service — so
+        // the launcher received ZERO fixes, indoors or out. Now a missing network provider can no
+        // longer suppress GPS, and the service stays alive whenever at least one provider registers.
+        boolean anyRegistered = false;
+        if (networkEnabled) {
+            try {
+                locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, LOCATION_UPDATE_INTERVAL, 0, networkLocationListener);
+                anyRegistered = true;
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        if (updateViaGps && gpsEnabled) {
+            try {
                 locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, LOCATION_UPDATE_INTERVAL, 0, gpsLocationListener);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     locationManager.registerGnssStatusCallback(gnssStatusCallback, handler);
                 }
+                anyRegistered = true;
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-        } catch (Exception e) {
-            // Provider may not exist, so process it friendly
-            e.printStackTrace();
-            return false;
         }
 
-        return true;
+        return anyRegistered;
     }
 
 
