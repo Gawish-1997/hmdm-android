@@ -48,6 +48,8 @@ import com.hmdm.launcher.R;
 import com.hmdm.launcher.helper.SettingsHelper;
 import com.hmdm.launcher.json.DeviceInfo;
 import com.hmdm.launcher.pro.ProUtils;
+import com.hmdm.launcher.task.SendDeviceInfoTask;
+import com.hmdm.launcher.util.DeviceInfoProvider;
 import com.hmdm.launcher.util.RemoteLogger;
 
 public class LocationService extends Service {
@@ -71,6 +73,15 @@ public class LocationService extends Service {
     public static final String FIX_PREFS = "phoenix_last_fix";
     private static volatile double lastLat = 0, lastLon = 0;
     private static volatile long lastFixTime = 0;
+
+    // Phoenix 6.45: the full device-info report (the only payload that carries info.location to the
+    // server) otherwise reaches the server only from boot/enrol/self-update and from the 15-min
+    // WorkManager job, and that job is deferred by the OEM battery manager on these tablets, so
+    // info.location stayed empty for hours even while fixes were flowing every minute. Posting it
+    // here, from the live foreground location service, is not subject to Doze/WorkManager deferral:
+    // the position reaches the admin page within a minute of the first fix, then at a steady interval.
+    private static final long INFO_POST_INTERVAL = 10L * 60 * 1000;
+    private static volatile long lastInfoPostTime = 0;
 
     public static void rememberFix(Context context, Location location) {
         if (location == null) return;
@@ -114,6 +125,21 @@ public class LocationService extends Service {
         return location;
     }
 
+    private void maybePostDeviceInfo() {
+        long now = System.currentTimeMillis();
+        if (now - lastInfoPostTime < INFO_POST_INTERVAL) {
+            return;
+        }
+        lastInfoPostTime = now;
+        try {
+            DeviceInfo deviceInfo = DeviceInfoProvider.getDeviceInfo(this, true, true);
+            new SendDeviceInfoTask(this).execute(deviceInfo);
+            RemoteLogger.log(this, Const.LOG_INFO, "phoenix: posted device info with fresh location");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     private static final int LOCATION_UPDATE_INTERVAL = 60000;
 
     // Use different location listeners for GPS and Network
@@ -126,6 +152,7 @@ public class LocationService extends Service {
             RemoteLogger.log(LocationService.this, Const.LOG_VERBOSE, "GPS location update: lat="
                     + location.getLatitude() + ", lon=" + location.getLongitude());
             rememberFix(LocationService.this, location);
+            maybePostDeviceInfo();
             ProUtils.processLocation(LocationService.this, location, LocationManager.GPS_PROVIDER);
         }
 
@@ -149,6 +176,7 @@ public class LocationService extends Service {
             RemoteLogger.log(LocationService.this, Const.LOG_VERBOSE, "Network location update: lat="
                     + location.getLatitude() + ", lon=" + location.getLongitude());
             rememberFix(LocationService.this, location);
+            maybePostDeviceInfo();
             ProUtils.processLocation(LocationService.this, location, LocationManager.NETWORK_PROVIDER);
         }
 
