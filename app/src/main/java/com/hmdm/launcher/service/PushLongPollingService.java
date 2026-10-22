@@ -54,6 +54,43 @@ public class PushLongPollingService extends Service {
     private ServerService serverService;
     private ServerService secondaryServerService;
 
+    // Phoenix custom build: re-pump the unattended remote-access app (RustDesk) when the rep OPENS the
+    // tablet (unlock / screen-on), not only at boot. Upstream started it on the boot path only, so a
+    // tablet that runs for days without a reboot — and whose RustDesk service has since been killed by
+    // the OS — was unreachable until the next restart. ACTION_USER_PRESENT / ACTION_SCREEN_ON must be
+    // registered at runtime (manifest registration is blocked since Android 8), so this long-living
+    // foreground service is the host. Throttled so it fires at most once per window, never on every
+    // unlock, so it does not flash open while the rep is actively using the tablet. startRemoteAccessApp
+    // is inert when the app is not installed or the "remote_access_package" setting is "off".
+    private static final long REMOTE_PUMP_MIN_INTERVAL_MS = 30 * 60 * 1000L;
+    private long lastRemotePumpMs = 0;
+    private boolean screenReceiverRegistered = false;
+    private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || intent.getAction() == null) {
+                return;
+            }
+            String action = intent.getAction();
+            if (!Intent.ACTION_USER_PRESENT.equals(action) && !Intent.ACTION_SCREEN_ON.equals(action)) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            if (now - lastRemotePumpMs < REMOTE_PUMP_MIN_INTERVAL_MS) {
+                return;
+            }
+            lastRemotePumpMs = now;
+            try {
+                SettingsHelper settingsHelper = SettingsHelper.getInstance(context);
+                Utils.startRemoteAccessApp(context,
+                        settingsHelper.getAppPreference(context.getPackageName(),
+                                Utils.REMOTE_ACCESS_PACKAGE_SETTING));
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    };
+
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
         public void onReceive( Context context, Intent intent ) {
@@ -68,6 +105,14 @@ public class PushLongPollingService extends Service {
     @Override
     public void onDestroy() {
         LocalBroadcastManager.getInstance( this ).unregisterReceiver(receiver);
+        if (screenReceiverRegistered) {
+            try {
+                unregisterReceiver(screenReceiver);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            screenReceiverRegistered = false;
+        }
         Log.i(Const.LOG_TAG, "PushLongPollingService: service stopped");
         started = false;
         super.onDestroy();
@@ -87,6 +132,26 @@ public class PushLongPollingService extends Service {
 
         IntentFilter intentFilter = new IntentFilter(Const.ACTION_SERVICE_STOP);
         LocalBroadcastManager.getInstance( this ).registerReceiver( receiver, intentFilter );
+
+        // Phoenix custom build: start listening for the tablet being opened so RustDesk is re-pumped
+        // then (see screenReceiver above). ACTION_USER_PRESENT fires on unlock, ACTION_SCREEN_ON when
+        // the screen wakes on a device with no lock. System broadcasts, so a normal registerReceiver,
+        // not LocalBroadcastManager; register once for the life of the service.
+        if (!screenReceiverRegistered) {
+            IntentFilter screenFilter = new IntentFilter();
+            screenFilter.addAction(Intent.ACTION_USER_PRESENT);
+            screenFilter.addAction(Intent.ACTION_SCREEN_ON);
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(screenReceiver, screenFilter, Context.RECEIVER_NOT_EXPORTED);
+                } else {
+                    registerReceiver(screenReceiver, screenFilter);
+                }
+                screenReceiverRegistered = true;
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
 
         if (!threadActive) {
             pollingThread = new Thread(pollingRunnable);
