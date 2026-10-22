@@ -170,6 +170,196 @@ public class Utils {
         }
     }
 
+    // Phoenix custom build: the package of the unattended remote-access app (RustDesk). Read from this
+    // launcher's own "Application settings" so it can change without a rebuild: empty/unset = the
+    // RustDesk default, "off" = do nothing (returns null). Everything that touches the remote-access
+    // app goes through this so there is one place to point it elsewhere.
+    public static final String REMOTE_ACCESS_PACKAGE_SETTING = "remote_access_package";
+    private static final String DEFAULT_REMOTE_ACCESS_PACKAGE = "com.carriez.flutter_hbb";
+
+    public static String resolveRemoteAccessPackage(String configured) {
+        if (configured == null) {
+            return DEFAULT_REMOTE_ACCESS_PACKAGE;
+        }
+        String value = configured.trim();
+        if (value.isEmpty()) {
+            return DEFAULT_REMOTE_ACCESS_PACKAGE;
+        }
+        if (value.equalsIgnoreCase("off")) {
+            return null;
+        }
+        return value;
+    }
+
+    // Phoenix custom build: the silent per-sync device state. Force location on, grant the
+    // remote-access app its runtime permissions, and write a status line to the device log. Called
+    // from ConfigUpdater.lockRestrictions, so it runs at boot, at enrol and on every sync. Nothing
+    // here shows the rep anything (the never-show-tracking golden rule); the one visible step —
+    // launching the remote-access app — is done separately on the boot path only (startRemoteAccessApp).
+    public static void applyPhoenixDeviceState(Context context, String configuredRemotePackage) {
+        String remotePackage = resolveRemoteAccessPackage(configuredRemotePackage);
+        forceLocationOn(context);
+        grantRemoteAccessPermissions(context, remotePackage);
+        reportPhoenixStatus(context, remotePackage);
+    }
+
+    // Phoenix custom build: force location ON and keep it on, so LocationService actually gets fixes.
+    // The rep can no longer turn it off (the no_config_location restriction greys the toggle); this
+    // makes sure it is enabled in the first place and grants this launcher its own location
+    // permissions. Device owner, Android 11+ only (setLocationEnabled was added in API 30).
+    public static void forceLocationOn(Context context) {
+        if (!isDeviceOwner(context) || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return;
+        }
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName adminComponentName = LegacyUtils.getAdminComponentName(context);
+            if (dpm == null || adminComponentName == null) {
+                return;
+            }
+            dpm.setLocationEnabled(adminComponentName, true);
+            dpm.setPermissionGrantState(adminComponentName, context.getPackageName(),
+                    Manifest.permission.ACCESS_FINE_LOCATION, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+            dpm.setPermissionGrantState(adminComponentName, context.getPackageName(),
+                    Manifest.permission.ACCESS_COARSE_LOCATION, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                dpm.setPermissionGrantState(adminComponentName, context.getPackageName(),
+                        Manifest.permission.ACCESS_BACKGROUND_LOCATION, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Phoenix custom build: grant the unattended remote-access app (RustDesk) the runtime permissions
+    // a device owner is allowed to grant, so the owner can open a tablet's screen without the rep
+    // tapping a prompt. The grants that stock Android does NOT expose to the device-owner API — screen
+    // capture (MediaProjection) and the accessibility service RustDesk needs to send input — are a
+    // one-time on-device step done at provisioning; they cannot be automated here. Idempotent, so it
+    // is safe to call on every sync. Each grant is tried on its own: a permission the app did not
+    // request is simply skipped.
+    public static void grantRemoteAccessPermissions(Context context, String remotePackage) {
+        if (remotePackage == null || remotePackage.isEmpty()
+                || !isDeviceOwner(context) || Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || !isPackageInstalled(context, remotePackage)) {
+            return;
+        }
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName adminComponentName = LegacyUtils.getAdminComponentName(context);
+            if (dpm == null || adminComponentName == null) {
+                return;
+            }
+            String[] perms = new String[] {
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+            };
+            for (String perm : perms) {
+                try {
+                    dpm.setPermissionGrantState(adminComponentName, remotePackage, perm,
+                            DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+                } catch (Exception ignore) {
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                try {
+                    dpm.setPermissionGrantState(adminComponentName, remotePackage,
+                            Manifest.permission.POST_NOTIFICATIONS, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+                } catch (Exception ignore) {
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Phoenix custom build: launch the remote-access app so it is running and reachable unattended.
+    // Called ONLY from the boot/enrol path (Initializer), never from the hourly sync, so the rep never
+    // sees it flash open while using the tablet. Once RustDesk is running it keeps its own foreground
+    // service alive; this is what gets it back after a reboot (the owner's complaint that "RustDesk
+    // stops when restarted").
+    public static void startRemoteAccessApp(Context context, String configuredRemotePackage) {
+        String remotePackage = resolveRemoteAccessPackage(configuredRemotePackage);
+        if (remotePackage == null || remotePackage.isEmpty() || !isPackageInstalled(context, remotePackage)) {
+            return;
+        }
+        try {
+            Intent launch = context.getPackageManager().getLaunchIntentForPackage(remotePackage);
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(launch);
+                RemoteLogger.log(context, Const.LOG_INFO, "Remote access app started: " + remotePackage);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Phoenix custom build: write a status line to the device log (which syncs to the server) so the
+    // owner can see, per tablet, whether location is on, whether the remote-access app is installed,
+    // and which app is in the foreground. Foreground needs usage-access, a one-time on-device grant
+    // that the device-owner API cannot set; without it the line honestly reads "unknown(no usage
+    // access)" rather than a misleading blank.
+    public static void reportPhoenixStatus(Context context, String remotePackage) {
+        try {
+            boolean locationOn = false;
+            try {
+                android.location.LocationManager lm =
+                        (android.location.LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+                if (lm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    locationOn = lm.isLocationEnabled();
+                } else if (lm != null) {
+                    locationOn = lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+                            || lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER);
+                }
+            } catch (Exception ignore) {
+            }
+            boolean remoteInstalled = remotePackage != null && isPackageInstalled(context, remotePackage);
+            RemoteLogger.log(context, Const.LOG_INFO,
+                    "phoenix-status: location=" + (locationOn ? "on" : "off")
+                            + " remoteApp=" + (remoteInstalled ? "installed" : "absent")
+                            + " foreground=" + getForegroundPackage(context));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Phoenix custom build: the package of the app currently in the foreground, via usage stats.
+    // Returns "unknown(no usage access)" when the usage-access grant is missing (the normal state
+    // until it is granted once on-device), so the status line is never silently wrong.
+    private static String getForegroundPackage(Context context) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+                return "unknown";
+            }
+            android.app.usage.UsageStatsManager usm =
+                    (android.app.usage.UsageStatsManager) context.getSystemService(Context.USAGE_STATS_SERVICE);
+            if (usm == null) {
+                return "unknown";
+            }
+            long now = System.currentTimeMillis();
+            List<android.app.usage.UsageStats> stats = usm.queryUsageStats(
+                    android.app.usage.UsageStatsManager.INTERVAL_DAILY, now - 60 * 60 * 1000L, now);
+            if (stats == null || stats.isEmpty()) {
+                return "unknown(no usage access)";
+            }
+            String pkg = null;
+            long lastTime = 0;
+            for (android.app.usage.UsageStats s : stats) {
+                if (s.getLastTimeUsed() > lastTime) {
+                    lastTime = s.getLastTimeUsed();
+                    pkg = s.getPackageName();
+                }
+            }
+            return pkg != null ? pkg : "unknown";
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
     // In the open source variant, there are no flavors, so by default it's "opensource"
     public static String getLauncherVariant() {
         return BuildConfig.FLAVOR == null || BuildConfig.FLAVOR.equals("") ? "opensource" : BuildConfig.FLAVOR;

@@ -26,7 +26,9 @@ import android.location.Location;
 import android.view.View;
 
 import com.hmdm.launcher.R;
+import com.hmdm.launcher.db.LocationTable;
 import com.hmdm.launcher.json.ServerConfig;
+import com.hmdm.launcher.task.SendLocationsTask;
 
 import java.util.Calendar;
 
@@ -121,7 +123,19 @@ public class ProUtils {
     }
 
     public static void processLocation(Context context, Location location, String provider) {
-        // Stub    
+        // Phoenix custom build: store the fix and flush pending rows to the devicelocations plugin.
+        // Upstream left this an empty stub in the open source variant, so the server held zero
+        // locations even though LocationService was collecting fixes. SendLocationsTask inserts the
+        // new fix and uploads everything still pending, deleting rows only on a successful upload.
+        if (context == null || location == null) {
+            return;
+        }
+        try {
+            new SendLocationsTask(context.getApplicationContext())
+                    .execute(new LocationTable.Location(location));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public static String getAppName(Context context) {

