@@ -966,6 +966,10 @@ public class ConfigUpdater {
         // app is launched separately on the boot path only (Initializer.startRemoteAccessApp).
         Utils.applyPhoenixDeviceState(context,
                 settingsHelper.getAppPreference(context.getPackageName(), Utils.REMOTE_ACCESS_PACKAGE_SETTING));
+        // Phoenix custom build 6.43: follow the tablet rules' location mode at EVERY sync. Before, the
+        // location service started only at boot, enrolment or a self-update, so turning tracking on
+        // (22 Oct 2026) reached a running tablet only after its next reboot.
+        Initializer.startLocationService(context, settingsHelper);
         String lockedPackages = settingsHelper.getAppPreference(context.getPackageName(), "locked_packages");
         Utils.lockPackages(context, lockedPackages, true);
         String unlockedPackages = settingsHelper.getAppPreference(context.getPackageName(), "unlocked_packages");

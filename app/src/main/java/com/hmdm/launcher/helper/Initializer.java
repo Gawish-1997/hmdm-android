@@ -181,9 +181,10 @@ public class Initializer {
         // Phoenix custom build: keep the location fix fresh under the STOCK Lenovo home. Upstream
         // started LocationService only from MainActivity (onPoliciesUpdated), which never runs when the
         // launcher is not the home, so the server held 0 locations. Start it here too, from the same
-        // boot/enrol/periodic path that already starts the push and status-bar services, using the
-        // location mode the server sent (gps/network); a null mode (DONOTTRACK) still stops it, so this
-        // is inert until the tablet rules ask for tracking. The foreground-service notice it raises is
+        // boot/enrol path that already starts the push and status-bar services, using the location
+        // mode the server sent (gps/network); a null mode (DONOTTRACK) stops it. Since 6.43 every sync
+        // re-applies it too (ConfigUpdater.lockRestrictions), so a change to the tablet rules takes
+        // effect at the next sync instead of the next reboot. The foreground-service notice it raises is
         // hidden by the disabled status bar above, so the rep sees no tracking sign (golden rule).
         startLocationService(context, settingsHelper);
 
@@ -287,7 +288,7 @@ public class Initializer {
     // Phoenix custom build: start LocationService from the boot/enrol/periodic path, mirroring
     // MainActivity.startLocationService() so the fix stays fresh under the stock home. A null/unset
     // location mode (DONOTTRACK) is passed through as ACTION_STOP, exactly as the home screen does.
-    private static void startLocationService(Context context, SettingsHelper settingsHelper) {
+    public static void startLocationService(Context context, SettingsHelper settingsHelper) {
         try {
             if (settingsHelper == null || settingsHelper.getConfig() == null) {
                 return;
@@ -295,7 +296,10 @@ public class Initializer {
             String mode = settingsHelper.getConfig().getRequestUpdates();
             if (mode == null) {
                 // DONOTTRACK: nothing to start under the stock home. Starting it as a foreground
-                // service only to immediately stop it would crash (startForeground never called).
+                // service only to immediately stop it would crash (startForeground never called), so a
+                // running one is stopped with stopService, which is allowed from anywhere and is a no-op
+                // when it is not running (6.43: the rules can now switch tracking off at a sync).
+                context.stopService(new Intent(context, com.hmdm.launcher.service.LocationService.class));
                 return;
             }
             Intent intent = new Intent(context, com.hmdm.launcher.service.LocationService.class);
