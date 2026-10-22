@@ -200,7 +200,30 @@ public class Utils {
         String remotePackage = resolveRemoteAccessPackage(configuredRemotePackage);
         forceLocationOn(context);
         grantRemoteAccessPermissions(context, remotePackage);
+        applyOwnerInfo(context);
         reportPhoenixStatus(context, remotePackage);
+    }
+
+    // Phoenix custom build: Android's own device-owner message (owner, 22 Oct 2026). It shows on the
+    // lock screen and in Settings, beside — never instead of — Android's own management notices.
+    public static final String OWNER_ORGANIZATION = "Sato Pharma";
+    public static final String OWNER_LOCK_SCREEN_INFO = "This device belongs to Sato Pharma";
+
+    public static void applyOwnerInfo(Context context) {
+        if (!isDeviceOwner(context) || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return;
+        }
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName adminComponentName = LegacyUtils.getAdminComponentName(context);
+            if (dpm == null || adminComponentName == null) {
+                return;
+            }
+            dpm.setOrganizationName(adminComponentName, OWNER_ORGANIZATION);
+            dpm.setDeviceOwnerLockScreenInfo(adminComponentName, OWNER_LOCK_SCREEN_INFO);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     // Phoenix custom build: force location ON and keep it on, so LocationService actually gets fixes.
