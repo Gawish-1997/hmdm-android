@@ -145,7 +145,13 @@ public class ConfigUpdater {
         settingsHelper = SettingsHelper.getInstance(context.getApplicationContext());
 
         if (settingsHelper.getConfig() != null && settingsHelper.getConfig().getRestrictions() != null) {
-            Utils.releaseUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
+            // Phoenix custom build: the protective restrictions (factory reset, safe boot, debugging,
+            // adding a user) stay ON for the whole sync. Upstream released every configured restriction
+            // here and re-locked them only after the last app installed, so one app whose download
+            // failed stopped the loop before lockRestrictions() and left factory reset open until the
+            // next good sync. None of these block an app install, so they never need lifting.
+            Utils.releaseUserRestrictions(context,
+                    Utils.withoutProtectiveRestrictions(settingsHelper.getConfig().getRestrictions()));
             // Explicitly release restrictions of installing/uninstalling apps
             Utils.releaseUserRestrictions(context, "no_install_apps,no_uninstall_apps");
         }
@@ -952,6 +958,9 @@ public class ConfigUpdater {
         if (settingsHelper.getConfig() != null && settingsHelper.getConfig().getRestrictions() != null) {
             Utils.lockUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
         }
+        // Phoenix custom build: the factory-reset lock, read from this launcher's own app setting.
+        Utils.applyFactoryResetProtection(context,
+                settingsHelper.getAppPreference(context.getPackageName(), Utils.FRP_ACCOUNTS_SETTING));
         String lockedPackages = settingsHelper.getAppPreference(context.getPackageName(), "locked_packages");
         Utils.lockPackages(context, lockedPackages, true);
         String unlockedPackages = settingsHelper.getAppPreference(context.getPackageName(), "unlocked_packages");

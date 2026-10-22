@@ -172,6 +172,15 @@ public class Initializer {
             e.printStackTrace();
         }
 
+        // Phoenix custom build: keep the location fix fresh under the STOCK Lenovo home. Upstream
+        // started LocationService only from MainActivity (onPoliciesUpdated), which never runs when the
+        // launcher is not the home, so the server held 0 locations. Start it here too, from the same
+        // boot/enrol/periodic path that already starts the push and status-bar services, using the
+        // location mode the server sent (gps/network); a null mode (DONOTTRACK) still stops it, so this
+        // is inert until the tablet rules ask for tracking. The foreground-service notice it raises is
+        // hidden by the disabled status bar above, so the rep sees no tracking sign (golden rule).
+        startLocationService(context, settingsHelper);
+
         // Send pending logs to server
         RemoteLogger.sendLogsToServer(context);
 
@@ -254,6 +263,32 @@ public class Initializer {
             }
         };
         ConfigUpdater.forceConfigUpdate(context, uiNotifier, false);
+    }
+
+    // Phoenix custom build: start LocationService from the boot/enrol/periodic path, mirroring
+    // MainActivity.startLocationService() so the fix stays fresh under the stock home. A null/unset
+    // location mode (DONOTTRACK) is passed through as ACTION_STOP, exactly as the home screen does.
+    private static void startLocationService(Context context, SettingsHelper settingsHelper) {
+        try {
+            if (settingsHelper == null || settingsHelper.getConfig() == null) {
+                return;
+            }
+            String mode = settingsHelper.getConfig().getRequestUpdates();
+            if (mode == null) {
+                // DONOTTRACK: nothing to start under the stock home. Starting it as a foreground
+                // service only to immediately stop it would crash (startForeground never called).
+                return;
+            }
+            Intent intent = new Intent(context, com.hmdm.launcher.service.LocationService.class);
+            intent.setAction(mode);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     // Used by InitialSetupActivity

@@ -27,6 +27,7 @@ import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.Service;
 import android.app.admin.DevicePolicyManager;
+import android.app.admin.FactoryResetProtectionPolicy;
 import android.app.admin.SystemUpdatePolicy;
 import android.content.ComponentName;
 import android.content.Context;
@@ -66,6 +67,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -94,6 +97,76 @@ public class Utils {
             }
         } catch (Exception e) {
             e.printStackTrace();
+        }
+    }
+
+    // Phoenix custom build: restrictions that never block an app install, so a sync keeps them on.
+    private static final Set<String> PROTECTIVE_RESTRICTIONS = new HashSet<>(Arrays.asList(
+            "no_factory_reset", "no_safe_boot", "no_debugging_features", "no_add_user"));
+
+    // The configured restrictions minus the protective ones; the result is what a sync may release.
+    public static String withoutProtectiveRestrictions(String restrictions) {
+        if (restrictions == null) {
+            return "";
+        }
+        StringBuilder kept = new StringBuilder();
+        for (String r : restrictions.split(",")) {
+            String name = r.trim();
+            if (name.isEmpty() || PROTECTIVE_RESTRICTIONS.contains(name)) {
+                continue;
+            }
+            if (kept.length() > 0) {
+                kept.append(",");
+            }
+            kept.append(name);
+        }
+        return kept.toString();
+    }
+
+    // Phoenix custom build: the factory-reset lock. A tablet wiped from the recovery menu asks, at
+    // setup, for one of these Google accounts before anyone can use it. The account IDs come from this
+    // launcher's own "Application settings" entry in the tablet rules, so no rebuild is needed to set or
+    // change them: empty = leave the device as it is, "off" = remove the lock, otherwise a
+    // comma-separated list of numeric Google account IDs. Android 11+ and device owner only.
+    public static final String FRP_ACCOUNTS_SETTING = "frp_accounts";
+
+    public static void applyFactoryResetProtection(Context context, String accounts) {
+        if (accounts == null || accounts.trim().isEmpty()) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !isDeviceOwner(context)) {
+            return;
+        }
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) context.getSystemService(Context.DEVICE_POLICY_SERVICE);
+            ComponentName adminComponentName = LegacyUtils.getAdminComponentName(context);
+            if (dpm == null || adminComponentName == null) {
+                return;
+            }
+            if (accounts.trim().equalsIgnoreCase("off")) {
+                dpm.setFactoryResetProtectionPolicy(adminComponentName, null);
+                RemoteLogger.log(context, Const.LOG_INFO, "Factory reset protection removed");
+                return;
+            }
+            List<String> ids = new ArrayList<>();
+            for (String a : accounts.split(",")) {
+                String id = a.trim();
+                if (id.matches("\\d{5,30}")) {
+                    ids.add(id);
+                }
+            }
+            if (ids.isEmpty()) {
+                RemoteLogger.log(context, Const.LOG_WARN, "Factory reset protection not set: no valid Google account ID");
+                return;
+            }
+            dpm.setFactoryResetProtectionPolicy(adminComponentName, new FactoryResetProtectionPolicy.Builder()
+                    .setFactoryResetProtectionAccounts(ids)
+                    .setFactoryResetProtectionEnabled(true)
+                    .build());
+            RemoteLogger.log(context, Const.LOG_INFO, "Factory reset protection set for " + ids.size() + " account(s)");
+        } catch (Exception e) {
+            e.printStackTrace();
+            RemoteLogger.log(context, Const.LOG_WARN, "Factory reset protection failed: " + e.getMessage());
         }
     }
 

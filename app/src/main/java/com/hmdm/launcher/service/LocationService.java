@@ -233,6 +233,16 @@ public class LocationService extends Service {
         } else {
             updateViaGps = false;
         }
+        // Phoenix custom build: the launcher now also starts this service with startForegroundService()
+        // from the background (Initializer), which requires startForeground() within seconds even when
+        // the service then stops itself — so go foreground first. The notice is hidden with the status bar.
+        if (!started) {
+            try {
+                startAsForeground();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
         if (!started || legacyGpsFlag != updateViaGps) {
             if (!requestLocationUpdates()) {
                 // No permissions!
