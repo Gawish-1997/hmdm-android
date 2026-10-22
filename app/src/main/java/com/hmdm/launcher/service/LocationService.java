@@ -46,6 +46,7 @@ import androidx.core.app.NotificationCompat;
 import com.hmdm.launcher.Const;
 import com.hmdm.launcher.R;
 import com.hmdm.launcher.helper.SettingsHelper;
+import com.hmdm.launcher.json.DeviceInfo;
 import com.hmdm.launcher.pro.ProUtils;
 import com.hmdm.launcher.util.RemoteLogger;
 
@@ -62,6 +63,57 @@ public class LocationService extends Service {
     boolean updateViaGps = false;
     boolean started = false;
 
+    // Phoenix custom build 6.44: remember the newest fix the launcher actually receives, so the
+    // 15-minute device-info report (SendDeviceInfoWorker) carries a position even when the system's
+    // getLastKnownLocation() returns null in that background job — seen on the Lenovo tablets, where
+    // fixes arrived every minute yet getLastKnownLocation stayed null, so info.location never reached
+    // the server. Kept in process (static) and in SharedPreferences so it survives a process restart.
+    public static final String FIX_PREFS = "phoenix_last_fix";
+    private static volatile double lastLat = 0, lastLon = 0;
+    private static volatile long lastFixTime = 0;
+
+    public static void rememberFix(Context context, Location location) {
+        if (location == null) return;
+        double lat = location.getLatitude(), lon = location.getLongitude();
+        if (lat == 0 && lon == 0) return;
+        long ts = location.getTime() > 0 ? location.getTime() : System.currentTimeMillis();
+        lastLat = lat; lastLon = lon; lastFixTime = ts;
+        try {
+            context.getApplicationContext().getSharedPreferences(FIX_PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putLong("lat", Double.doubleToRawLongBits(lat))
+                    .putLong("lon", Double.doubleToRawLongBits(lon))
+                    .putLong("ts", ts)
+                    .apply();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // The newest remembered fix as a DeviceInfo.Location, or null when there is none within 6 hours.
+    public static DeviceInfo.Location cachedLocation(Context context) {
+        double lat = lastLat, lon = lastLon;
+        long ts = lastFixTime;
+        if (ts == 0) {
+            try {
+                android.content.SharedPreferences prefs = context.getApplicationContext()
+                        .getSharedPreferences(FIX_PREFS, Context.MODE_PRIVATE);
+                ts = prefs.getLong("ts", 0);
+                lat = Double.longBitsToDouble(prefs.getLong("lat", 0));
+                lon = Double.longBitsToDouble(prefs.getLong("lon", 0));
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        if (ts == 0 || (lat == 0 && lon == 0)) return null;
+        if (System.currentTimeMillis() - ts > 6L * 60 * 60 * 1000) return null;
+        DeviceInfo.Location location = new DeviceInfo.Location();
+        location.setLat(lat);
+        location.setLon(lon);
+        location.setTs(ts);
+        return location;
+    }
+
     private static final int LOCATION_UPDATE_INTERVAL = 60000;
 
     // Use different location listeners for GPS and Network
@@ -73,6 +125,7 @@ public class LocationService extends Service {
             //Toast.makeText(LocationService.this, "Location updated from GPS", Toast.LENGTH_SHORT).show();
             RemoteLogger.log(LocationService.this, Const.LOG_VERBOSE, "GPS location update: lat="
                     + location.getLatitude() + ", lon=" + location.getLongitude());
+            rememberFix(LocationService.this, location);
             ProUtils.processLocation(LocationService.this, location, LocationManager.GPS_PROVIDER);
         }
 
@@ -95,6 +148,7 @@ public class LocationService extends Service {
             //Toast.makeText(LocationService.this, "Location updated from Network", Toast.LENGTH_SHORT).show();
             RemoteLogger.log(LocationService.this, Const.LOG_VERBOSE, "Network location update: lat="
                     + location.getLatitude() + ", lon=" + location.getLongitude());
+            rememberFix(LocationService.this, location);
             ProUtils.processLocation(LocationService.this, location, LocationManager.NETWORK_PROVIDER);
         }
 

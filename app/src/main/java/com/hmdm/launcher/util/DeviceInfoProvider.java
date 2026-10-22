@@ -198,8 +198,19 @@ public class DeviceInfoProvider {
         return deviceInfo;
     }
 
-    @SuppressWarnings({"MissingPermission"})
+    // Phoenix custom build 6.44: prefer the system's last-known fix; when it is null (seen in the
+    // background device-info job even while the location service is collecting fixes) fall back to the
+    // newest fix the launcher itself received and cached, so the periodic report carries a position.
     public static DeviceInfo.Location getLocation(Context context) {
+        DeviceInfo.Location fromSystem = getLastKnownSystemLocation(context);
+        if (fromSystem != null) {
+            return fromSystem;
+        }
+        return com.hmdm.launcher.service.LocationService.cachedLocation(context);
+    }
+
+    @SuppressWarnings({"MissingPermission"})
+    private static DeviceInfo.Location getLastKnownSystemLocation(Context context) {
         try {
             LocationManager locationManager = (LocationManager)context.getSystemService(Context.LOCATION_SERVICE);
             Location lastLocationGps = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
