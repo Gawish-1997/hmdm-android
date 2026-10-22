@@ -80,6 +80,12 @@ public class Initializer {
     }
 
     public static void startServicesAndLoadConfig(Context context) {
+        startServicesAndLoadConfig(context, true);
+    }
+
+    // Phoenix custom build: launchRemoteAccessApp is false only on the after-self-update path
+    // (PackageReplacedReceiver), so the remote-access app never flashes open mid-day.
+    public static void startServicesAndLoadConfig(Context context, boolean launchRemoteAccessApp) {
         // Start Push service
         String pushOptions = null;
         int keepaliveTime = Const.DEFAULT_PUSH_ALARM_KEEPALIVE_TIME_SEC;
@@ -185,11 +191,13 @@ public class Initializer {
         // path so it is running and reachable without the rep — this is what gets it back after a
         // reboot. Only here, never on the hourly sync, so it does not flash open while the rep is
         // using the tablet. Inert when the app is not installed or the setting is "off".
-        try {
-            Utils.startRemoteAccessApp(context,
-                    settingsHelper.getAppPreference(context.getPackageName(), Utils.REMOTE_ACCESS_PACKAGE_SETTING));
-        } catch (Exception e) {
-            e.printStackTrace();
+        if (launchRemoteAccessApp) {
+            try {
+                Utils.startRemoteAccessApp(context,
+                        settingsHelper.getAppPreference(context.getPackageName(), Utils.REMOTE_ACCESS_PACKAGE_SETTING));
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
 
         // Send pending logs to server
