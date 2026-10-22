@@ -116,6 +116,20 @@ public class LocationService extends Service {
 
     private static final int LOCATION_UPDATE_INTERVAL = 60000;
 
+    // Phoenix custom build 6.46: PERIODIC location (owner, 22 Oct 2026 — "make the tablet location
+    // periodic"). Until 6.45 the service registered continuous GPS updates and stayed alive forever
+    // (START_STICKY), so the GPS radio ran non-stop. Now each invocation is a bounded SAMPLING BURST:
+    // it registers the providers, takes the first good fix (or gives up at the window cap), remembers
+    // it for the 15-minute device-info report (SendDeviceInfoWorker reads the cache), then unregisters
+    // and stops itself. The config sync re-invokes it every ~15 minutes
+    // (ConfigUpdater -> Initializer.startLocationService), so the net behaviour is one short fix per
+    // sync instead of a permanent GPS stream — lighter on the battery and no continuous tracking. The
+    // rep still sees nothing: the real status bar is disabled and replaced (Initializer /
+    // Utils.setStatusBarDisabled + StatusBarOverlayService), which hides the foreground-service notice.
+    private static final long SAMPLE_WINDOW_MS = 120000;   // max GPS-on time per periodic burst
+    private static final long STOP_AFTER_FIX_MS = 2000;    // short grace after the first fix for a better one
+    private Runnable burstStopRunnable = null;
+
     // Use different location listeners for GPS and Network
     // Not sure what happens if we share the same listener for both providers
     private LocationListener gpsLocationListener = new LocationListener() {
@@ -127,6 +141,7 @@ public class LocationService extends Service {
                     + location.getLatitude() + ", lon=" + location.getLongitude());
             rememberFix(LocationService.this, location);
             ProUtils.processLocation(LocationService.this, location, LocationManager.GPS_PROVIDER);
+            endBurstAfterFix();
         }
 
         @Override
@@ -150,6 +165,7 @@ public class LocationService extends Service {
                     + location.getLatitude() + ", lon=" + location.getLongitude());
             rememberFix(LocationService.this, location);
             ProUtils.processLocation(LocationService.this, location, LocationManager.NETWORK_PROVIDER);
+            endBurstAfterFix();
         }
 
         @Override
@@ -265,9 +281,46 @@ public class LocationService extends Service {
         return anyRegistered;
     }
 
+    // Phoenix 6.46: a fix arrived, so this periodic burst has what it needs. Give a short grace for a
+    // slightly better fix, then stop until the next sync re-invokes the service.
+    private void endBurstAfterFix() {
+        armBurstStop(STOP_AFTER_FIX_MS);
+    }
+
+    // (Re)arm the single timer that ends the current sampling burst.
+    private void armBurstStop(long delayMs) {
+        if (burstStopRunnable != null) {
+            handler.removeCallbacks(burstStopRunnable);
+        }
+        burstStopRunnable = new Runnable() {
+            @Override
+            public void run() {
+                RemoteLogger.log(LocationService.this, Const.LOG_VERBOSE,
+                        "Periodic location burst ended; stopping until the next sync.");
+                stopBurst();
+            }
+        };
+        handler.postDelayed(burstStopRunnable, delayMs);
+    }
+
+    // Unregister every provider and stop the service, ending the burst.
+    private void stopBurst() {
+        try { locationManager.removeUpdates(gpsLocationListener); } catch (Exception e) { e.printStackTrace(); }
+        try { locationManager.removeUpdates(networkLocationListener); } catch (Exception e) { e.printStackTrace(); }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && gnssStatusCallback != null) {
+            try { locationManager.unregisterGnssStatusCallback(gnssStatusCallback); } catch (Exception e) { e.printStackTrace(); }
+        }
+        started = false;
+        try { stopForeground(true); } catch (Exception e) { e.printStackTrace(); }
+        stopSelf();
+    }
+
 
     @Override
     public void onDestroy() {
+        if (burstStopRunnable != null) {
+            handler.removeCallbacks(burstStopRunnable);
+        }
         locationManager.removeUpdates(networkLocationListener);
         locationManager.removeUpdates(gpsLocationListener);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -326,6 +379,11 @@ public class LocationService extends Service {
             startAsForeground();
             started = true;
         }
-        return START_STICKY;
+        // Phoenix 6.46: bound this invocation to a periodic sampling burst. The config sync re-invokes
+        // the service every ~15 minutes, so re-arm the window on every start; the listeners cut it short
+        // on the first fix. START_NOT_STICKY so a kill between syncs is not auto-restarted into a
+        // continuous service — periodicity comes from the sync, not from the service staying alive.
+        armBurstStop(SAMPLE_WINDOW_MS);
+        return START_NOT_STICKY;
     }
 }
